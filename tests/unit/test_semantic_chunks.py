@@ -79,3 +79,17 @@ def test_code_comments_are_not_headings() -> None:
     text = "# Proxmox\n\n```bash\n# installer vzdump\napt install vzdump\n```\n\n## Sauvegarde\n\nx"
     headings = [piece.heading for piece in split_markdown(text, "Proxmox")]
     assert headings == ["Proxmox", "Proxmox › Sauvegarde"]
+
+
+def test_front_matter_context_keeps_short_values_and_drops_identifiers() -> None:
+    from synaptane.services.semantic import front_matter_context
+
+    page = (
+        '---\nappel: "6a97d07d0ae632ba1507b31d"\nlead: "1384248"\nmarque: "DCOM"\n'
+        'signe: "non"\nprix_annonce: true\nprix_eur: 800\nmots_prospect: ""\n'
+        'resume: "' + "x" * 80 + '"\n---\n\n# Appel\n\nTexte.'
+    )
+    assert front_matter_context(page) == (
+        "marque: DCOM; signe: non; prix_annonce: true"
+    )
+    assert front_matter_context("# Sans en-tête\n\nTexte.") == ""

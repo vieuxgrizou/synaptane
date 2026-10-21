@@ -305,6 +305,9 @@ Each option of `synaptane.toml` can be overridden by an environment variable
 | `ocr_images` | Extract text from images (OCR), `true` by default. |
 | `allow_private_webhooks` | Allows webhooks over HTTP and to the local network. **Development only.** |
 | `api_docs` | Publishes the interactive documentation `/api/docs` and the schema `/api/v1/openapi.json`, `false` by default. |
+| `meaning_min_similarity` | Semantic search: a page found only by meaning is suggested once the best page reaches this similarity (between 0 and 1). Unset (default): it must clearly stand out from the other neighbors, which rarely happens in a space of similar pages (call transcripts, tickets). The scale depends on the embedding model: measure it on questions about the space and on unrelated ones. Compose variable: `MEANING_MIN_SIMILARITY`. |
+| `rerank_model` | Semantic search: a Voyage rerank model (`rerank-2.5`, `rerank-2.5-lite`) that rescores the 40 best results for the question, with the organization's Voyage key. Unset (default): no reranking. Word-only searches are never reranked, and a provider outage keeps the usual order. Compose variable: `RERANK_MODEL`. |
+| `embed_front_matter` | Semantic search: each chunk of a Markdown page is embedded with the short values of the page's front matter (identifiers and long values left out), so that a chunk deep in the page keeps what the page is about. Useful for pages generated with metadata (call transcripts, tickets). `false` by default; run `synaptane reindex` after changing it. Compose variable: `EMBED_FRONT_MATTER`. |
 | `backup_age_recipients` | age public keys (`age1…`) that `backup --offsite` encrypts for. As an environment variable: comma-separated. See [Backup](backup.md). |
 | `backup_age_recipients_file` | Or a file of age recipients. |
 | `backup_remotes` | rclone destinations of the off-site copy (`name:path`, or a folder). |

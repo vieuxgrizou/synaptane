@@ -74,6 +74,9 @@ _PREFIXES = (
     ("nomic-embed", "search_query: ", "search_document: "),
     ("e5", "query: ", "passage: "),
     ("mxbai-embed", "Represent this sentence for searching relevant passages: ", ""),
+    # Voyage: the prompts its API prepends for input_type "query" / "document"
+    ("voyage", "Represent the query for retrieving supporting documents: ",
+     "Represent the document for retrieval: "),
 )
 
 

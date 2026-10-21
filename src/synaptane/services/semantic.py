@@ -6,9 +6,10 @@ Pages are split by section; each chunk is embedded with the page title and its h
 index (pgvector) is incremental (Git hash of each file) and can be rebuilt from Git.
 """
 
+import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from uuid import UUID
@@ -34,7 +35,7 @@ from synaptane.git.repo import PathRefused, Repository, safe_path
 from synaptane.services import Actor, audit, budget, jobs
 from synaptane.services.content import kind_of
 from synaptane.services.extraction import read_json, write_json
-from synaptane.services.inbox import CONTENT_DIR
+from synaptane.services.inbox import CONTENT_DIR, parse_front_matter
 from synaptane.services.secrets import (
     CUSTOM_URL_REFUSED,
     check_destination,
@@ -172,6 +173,30 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 class Piece:
     heading: str  # "Title › Section › Subsection"
     text: str
+    context: str = ""  # values of the page's front matter, embedded with the chunk
+
+
+CONTEXT_CHARS = 600  # context taken from the front matter, per page
+CONTEXT_VALUE_CHARS = 60  # longer values (summaries, lists) are left to the chunks themselves
+# Hashes, identifiers and bare numbers (codes, counters): no meaning for the search
+_IDENTIFIER = re.compile(r"^(?:[0-9a-f]{12,}|-?[0-9][0-9.,]*)$")
+
+
+def front_matter_context(text: str) -> str:
+    """Short values of a page's front matter, as `key: value; …`: identifiers, bare numbers,
+    empty and long values left out."""
+    fields, _ = parse_front_matter(text)
+    parts = []
+    for key, value in fields.items():
+        if isinstance(value, bool | int | float):
+            value = json.dumps(value)
+        if not isinstance(value, str):
+            continue
+        value = " ".join(value.split())
+        if not value or len(value) > CONTEXT_VALUE_CHARS or _IDENTIFIER.match(value):
+            continue
+        parts.append(f"{key}: {value}")
+    return "; ".join(parts)[:CONTEXT_CHARS]
 
 
 def _pack(paragraphs: list[str]) -> list[str]:
@@ -259,7 +284,9 @@ def _pieces(ws: Workspace, space_id: UUID, repo: Repository, path: str) -> list[
         return []
     text = data.decode("utf-8", "replace")[:MAX_CHARS_PER_FILE]
     if kind == "markdown":
-        return split_markdown(text, title_of(text, path.rsplit("/", 1)[-1]))
+        pieces = split_markdown(text, title_of(text, path.rsplit("/", 1)[-1]))
+        context = front_matter_context(text) if ws.embed_front_matter else ""
+        return [replace(p, context=context) for p in pieces] if context else pieces
     return split_plain(text, path.rsplit("/", 1)[-1])
 
 
@@ -328,7 +355,13 @@ def index_space(
             session.add_all(rows)
 
     def texts(files: list[tuple[str, list[Piece]]]) -> list[str]:
-        return [f"{prefix}{p.heading}\n\n{p.text}" for _, pieces in files for p in pieces]
+        return [
+            f"{prefix}{p.heading}\n{p.context}\n\n{p.text}"
+            if p.context
+            else f"{prefix}{p.heading}\n\n{p.text}"
+            for _, pieces in files
+            for p in pieces
+        ]
 
     def flush(files: list[tuple[str, list[Piece]]]) -> None:
         """One call to the provider for several files, and a single transaction."""

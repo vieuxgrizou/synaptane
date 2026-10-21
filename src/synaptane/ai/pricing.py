@@ -44,6 +44,9 @@ EMBEDDING_PRICES: dict[str, Decimal] = {
     "mistral-embed": Decimal("0.10"),
     "voyage-3.5": Decimal("0.06"),
     "voyage-3.5-lite": Decimal("0.02"),
+    "voyage-4-large": Decimal("0.12"),
+    "voyage-4": Decimal("0.06"),
+    "voyage-4-lite": Decimal("0.02"),
 }
 # Embedding providers billed per use (Ollama and compatible APIs: unknown).
 PAID_EMBEDDINGS = ("openai", "gemini", "mistral", "voyage")

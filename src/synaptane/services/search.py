@@ -38,7 +38,7 @@ from markdown_it import MarkdownIt
 from mdit_py_plugins.anchors.index import slugify, unique_slug
 from sqlalchemy.orm import Session
 
-from synaptane.ai import embeddings
+from synaptane.ai import embeddings, rerank
 from synaptane.ai.base import AIError
 from synaptane.ai.embeddings import Embedder, EmbeddingConfig, prefixes
 from synaptane.core import markdown
@@ -930,8 +930,14 @@ def _meaning(
     others = sorted(m.similarity for m in meaning[1:])
     median = others[len(others) // 2] if others else 0.0
     # The best neighbour does not stand out: the question probably has nothing to do with the
-    # space; meaning then adds nothing (no tie-breaking, no extra page).
-    if others and best - median < MEANING_ONLY_CONFIDENCE:
+    # space; meaning then adds nothing (no tie-breaking, no extra page). With a similarity
+    # floor, the best neighbour must reach it instead: in a space of similar pages (call
+    # transcripts…), a relevant question stands out no more than an unrelated one.
+    floor = ws.meaning_min_similarity
+    if floor is not None:
+        if best < floor:
+            return []
+    elif others and best - median < MEANING_ONLY_CONFIDENCE:
         return []
     clone = ws.clone_path(space.id)
     found_pages: list[tuple[float, Hit]] = []
@@ -960,6 +966,70 @@ def _meaning(
             )
         found_pages.append((1 / (RRF_K + rank), hit))
     return found_pages
+
+
+RERANK_POOL = 40  # best fused results rescored by the reranker
+RERANK_CHARS = 2000  # text read by the reranker, per result
+
+
+def _rerank_text(hit: Hit) -> str:
+    """What the reranker reads of a result: title, section and excerpts."""
+    lines = [hit.title, hit.section]
+    for snippet in hit.snippets:
+        lines += [*snippet.before, snippet.text, *snippet.after]
+    lines += hit.passage
+    return "\n".join(line for line in lines if line)[:RERANK_CHARS]
+
+
+def _rerank_order(hits: list[Hit], scores: list[float]) -> list[Hit]:
+    """Results by decreasing relevance; equal scores keep the fused order."""
+    return [hits[i] for i in sorted(range(len(hits)), key=lambda i: -scores[i])]
+
+
+def _rerank_config(
+    session: Session, ws: Workspace, spaces_: Sequence[Space]
+) -> EmbeddingConfig | None:
+    """Embedding configuration of the first organization whose provider can rerank."""
+    seen: set[UUID] = set()
+    for space in spaces_:
+        if space.org_id in seen:
+            continue
+        seen.add(space.org_id)
+        config = semantic.org_config(session, ws.box, space.org_id)
+        if config is not None and config.provider in rerank.RERANK_PROVIDERS:
+            return config
+    return None
+
+
+def _reranked(
+    session: Session,
+    ws: Workspace,
+    spaces_: Sequence[Space],
+    query: Query,
+    hits: list[Hit],
+    limit: int,
+    mode: str,
+    reranker: rerank.Reranker | None = None,
+) -> list[Hit]:
+    """The best `limit` results, rescored by the reranker when one is set (`rerank_model`).
+    Word-only searches (`mode=text`, regular expression) keep their order; so does a provider
+    outage."""
+    top = max(1, min(limit, 100))
+    model = ws.rerank_model
+    if not model or query.regex or mode == "text" or len(hits) < 2:
+        return hits[:top]
+    config = _rerank_config(session, ws, spaces_)
+    if config is None:
+        return hits[:top]
+    pool = hits[:RERANK_POOL]
+    try:
+        scores = (reranker or rerank.rerank)(
+            config, model, query.text, [_rerank_text(h) for h in pool]
+        )
+    except AIError as error:
+        log.warning("Reranking skipped: %s", error)
+        return hits[:top]
+    return (_rerank_order(pool, scores) + hits[len(pool) :])[:top]
 
 
 def search(
@@ -1022,7 +1092,7 @@ def search(
     if not meaning:
         hits = [hit for space_hits in lexical.values() for hit in space_hits]
         hits.sort(key=lambda h: (-h.score, -h.modified, h.address, h.path))
-        return hits[: max(1, min(limit, 100))]
+        return _reranked(session, ws, visible, query, hits, limit, mode)
     # RRF fusion: **global** lexical rank (word scores compare across spaces), then the
     # contribution of meaning added where it exists. A page is never penalized because its
     # space has embeddings.
@@ -1043,4 +1113,4 @@ def search(
     ranked = sorted(
         fused.values(), key=lambda item: (-item[0], -item[1].score, item[1].address, item[1].path)
     )
-    return [hit for _, hit in ranked[: max(1, min(limit, 100))]]
+    return _reranked(session, ws, visible, query, [hit for _, hit in ranked], limit, mode)
