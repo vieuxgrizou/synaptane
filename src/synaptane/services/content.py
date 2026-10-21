@@ -6,6 +6,7 @@ Write: a commit that holds the change and its `change` inbox item, then synchron
 and reindexing by the worker.
 """
 
+import codecs
 import itertools
 import logging
 import mimetypes
@@ -56,7 +57,9 @@ def kind_of(path: str, data: bytes | None = None) -> str:
         head = data[:8192]
         if b"\0" not in head:
             try:
-                head.decode("utf-8")
+                # Incremental: a multi-byte character cut by the 8 KiB window is not an error,
+                # an invalid byte still is (a strict decode classed such text files as binary).
+                codecs.getincrementaldecoder("utf-8")().decode(head, final=len(data) <= len(head))
                 return "text"
             except UnicodeDecodeError:
                 pass
